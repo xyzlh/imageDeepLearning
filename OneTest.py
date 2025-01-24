@@ -166,54 +166,98 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Instantiate the model
 model = UNetWithMultiHeadAttention(input_channels=3, n_classes=1, n_filters=32, key_dim=512).to(device)
-optimizer = optim.Adam(model.parameters(), lr=1e-2)
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
+optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
-# Initialize lists to store losses and accuracies for each epoch
-losses = []
-accuracies = []
-num_epochs=5
+
+train_losses = []
+train_accuracies = []
+val_losses = []
+val_accuracies = []
+num_epochs = 5
 plt.ion()  # Enable interactive mode for plotting
 
 # Training loop
 for epoch in range(num_epochs):
     model.train()  # Set the model to training mode
-    epoch_loss = 0  # Total loss for the current epoch
-    correct_predictions = 0  # Counter for correct predictions
-    total_pixels = 0  # Counter for total pixels processed
+    epoch_loss = 0
+    correct_predictions = 0
+    total_pixels = 0
 
-    # Use tqdm to show progress of train_loader
+    # Training phase
     for batch_index, (images, masks) in enumerate(tqdm(train_loader, desc=f'Epoch {epoch + 1}/{num_epochs}')):
         images = images.to(device)
-        masks = masks.to(device)  # Ensure masks are on the same device
-        optimizer.zero_grad()  # Clear gradients
-        outputs = model(images)  # Forward pass
-        loss = combined_loss(masks, outputs)  # Compute loss
-        loss.backward()  # Backward pass
-        optimizer.step()  # Update parameters
-        epoch_loss += loss.item()  # Accumulate the loss for the epoch
+        masks = masks.to(device)
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = combined_loss(masks, outputs)
+        loss.backward()
+        optimizer.step()
+        epoch_loss += loss.item()
 
-        # Calculate accuracy (assuming binary classification with sigmoid activation)
+        # Calculate accuracy
         preds = torch.sigmoid(outputs)
-        preds = (preds > 0.5).float()  # Convert probabilities to binary predictions
+        preds = (preds > 0.5).float()
         correct_predictions += (preds == masks).sum().item()
         total_pixels += torch.numel(preds)
-    scheduler.step()
-    avg_loss = epoch_loss / len(train_loader)  # Average loss for the epoch
-    accuracy = correct_predictions / total_pixels  # Calculate accuracy
-    losses.append(avg_loss)
-    accuracies.append(accuracy)
-    current_lr = optimizer.param_groups[0]['lr']
-    print(f'Epoch [{epoch + 1}/{num_epochs}], Accuracy: {accuracy:.4f},Loss: {avg_loss:.4f}, Learning Rate: {current_lr:.6f}')
 
+    # Average loss and accuracy for train set
+    avg_train_loss = epoch_loss / len(train_loader)
+    train_accuracy = correct_predictions / total_pixels
+    train_losses.append(avg_train_loss)
+    train_accuracies.append(train_accuracy)
+
+    # Validation phase
+    model.eval()  # Set the model to evaluation mode
+    val_loss = 0
+    val_correct_predictions = 0
+    val_total_pixels = 0
+
+    with torch.no_grad():  # Disable gradient calculation for validation
+        for images, masks in tqdm(val_loader, desc='Validation'):
+            images = images.to(device)
+            masks = masks.to(device)
+            outputs = model(images)
+            loss = combined_loss(masks, outputs)
+            val_loss += loss.item()
+
+            # Calculate accuracy
+            preds = torch.sigmoid(outputs)
+            preds = (preds > 0.5).float()
+            val_correct_predictions += (preds == masks).sum().item()
+            val_total_pixels += torch.numel(preds)
+
+    # Average loss and accuracy for validation set
+    avg_val_loss = val_loss / len(val_loader)
+    val_accuracy = val_correct_predictions / val_total_pixels
+    val_losses.append(avg_val_loss)
+    val_accuracies.append(val_accuracy)
+
+    current_lr = optimizer.param_groups[0]['lr']
+    print(f'Epoch [{epoch + 1}/{num_epochs}], '
+          f'Train Accuracy: {train_accuracy:.4f}, Train Loss: {avg_train_loss:.4f}, '
+          f'Val Accuracy: {val_accuracy:.4f}, Val Loss: {avg_val_loss:.4f}, '
+          f'Learning Rate: {current_lr:.6f}')
 
     # Real-time plotting of loss and accuracy
-    plt.figure(figsize=(6, 6))
-    plt.plot(range(1, epoch + 2), losses, label='Loss', color='#76B900', marker='o')
-    plt.plot(range(1, epoch + 2), accuracies, label='Accuracy', color='orange', marker='x')  # Accuracy plot
+    plt.figure(figsize=(12, 5))
+
+    # Plotting Loss
+    plt.subplot(1, 2, 1)
+    plt.plot(range(1, epoch + 2), train_losses, label='Train Loss', color='blue', marker='o')
+    plt.plot(range(1, epoch + 2), val_losses, label='Validation Loss', color='orange', marker='x')
     plt.xlabel('Epochs')
-    plt.ylabel('Value')
-    plt.title('Training Loss and Accuracy')
+    plt.ylabel('Loss')
+    plt.title('Training and Validation Loss')
+    plt.legend()
+    plt.grid()
+
+    # Plotting Accuracy
+    plt.subplot(1, 2, 2)
+    plt.plot(range(1, epoch + 2), train_accuracies, label='Train Accuracy', color='blue', marker='o')
+    plt.plot(range(1, epoch + 2), val_accuracies, label = 'Validation Accuracy', color='orange', marker='x')
+    plt.xlabel('Epochs')
+    plt.ylabel('Accuracy')
+    plt.title('Training and Validation Accuracy')
     plt.legend()
     plt.grid()
 
@@ -226,4 +270,4 @@ torch.save(model.state_dict(), model_path)
 print(f'Model saved to {model_path}')
 
 plt.ioff()  # Turn off interactive mode
-plt.show()  # Display the final plot
+plt.show()  # Display the final plots
