@@ -79,7 +79,7 @@ def visualize_input_output_target(input_image, output_image, target_image=None):
 # 4. 主函数
 def main_inference():
     plt.rcParams['font.family'] = 'SimHei'  # 用来正常显示中文标签
-    model_path = './model/resnet50_unet_epoch_15.pth'  # 根据实际路径与文件名修改
+    model_path = 'model/resnet50_FPN_epoch_15.pth'  # 根据实际路径与文件名修改
     model = config.backbone  # 使用之前配置的模型
 
     # 加载模型

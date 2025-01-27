@@ -12,7 +12,12 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 import torch
-
+import os
+from PIL import Image
+from torch.utils.data import Dataset
+import torchvision.transforms as transforms
+import segmentation_models_pytorch as smp
+from torch.optim import Adam
 class TumorDataset(Dataset):
     def __init__(self, root_dir, img_dir, mask_dir, transform=None):
         self.root_dir = root_dir  # /kaggle/working/
@@ -40,6 +45,7 @@ class TumorDataset(Dataset):
             mask = self.transform(mask)
 
         return img_gray, mask
+
 class Config:
     def __init__(self, device, root_dir, train_img_dir, train_mask_dir,
                  test_img_dir, test_mask_dir, valid_img_dir, valid_mask_dir,
@@ -58,9 +64,8 @@ class Config:
         self.lr = lr
         self.num_epochs = num_epochs
         self.print_freq = print_freq
-import segmentation_models_pytorch as smp
-from torch.optim import Adam
 
+# Change U-Net to FCN
 config = Config(
     device="cuda",
     root_dir="../archive/",
@@ -70,7 +75,7 @@ config = Config(
     test_mask_dir="../archive/test_mask",
     valid_img_dir="../archive/valid_img",
     valid_mask_dir="../archive/valid_mask",
-    backbone=smp.Unet(
+    backbone=smp.FPN(  # Change this line to use FCN
         encoder_name="resnet50",
         encoder_weights="imagenet",
         in_channels=1,
@@ -163,7 +168,7 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs, n
 
         print(f'Epoch [{epoch + 1}/{num_epochs}] Average Validation Loss: {avg_valid_loss:.4f}, Average Validation Mean IoU: {avg_valid_miou:.4f}')
 
-    torch.save(model.state_dict(), f'./model/resnet50_unet_epoch_{num_epochs}.pth')
+    torch.save(model.state_dict(), f'./model/resnet50_FPN_epoch_{num_epochs}.pth')
 
 def main():
     criterion = torch.nn.BCEWithLogitsLoss()
