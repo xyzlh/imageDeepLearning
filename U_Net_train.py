@@ -163,7 +163,7 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs, n
 
         print(f'Epoch [{epoch + 1}/{num_epochs}] Average Validation Loss: {avg_valid_loss:.4f}, Average Validation Mean IoU: {avg_valid_miou:.4f}')
 
-    torch.save(model.state_dict(), f'./model/resnet50_unet_epoch_{num_epochs}.pth')
+    torch.save(model.state_dict(), f'./model/UNet_epoch_{num_epochs}.pth')
 
 def main():
     criterion = torch.nn.BCEWithLogitsLoss()

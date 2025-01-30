@@ -1,98 +1,70 @@
 import torch
+import os
+from torch.utils.data import DataLoader
 from torchvision import transforms
 from PIL import Image
-import matplotlib.pyplot as plt
-
-from U_Net_train import config
+import numpy as np
+from U_Net_train import  config,TumorDataset  # 假设U_Net_train.py包含数据集和配置
+import segmentation_models_pytorch as smp
+from torch.optim import Adam
+from U_Net_train import  train_loader,test_loader,valid_dataset
 
 # 定义设备
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-# 1. 加载模型
-def load_model(model, model_path):
-    model.load_state_dict(torch.load(model_path, map_location=device))  # 确保模型加载到正确设备
-    model.to(device)  # 移动模型到设备
-    model.eval()  # 切换到评估模式
-    return model
+# 计算IoU
 
 
-# 2. 准备输入图像
-def prepare_image(image_path, transform):
-    img = Image.open(image_path).convert('L')  # 转为灰度图
-    img = transform(img)  # 应用预处理转换
-    img = img.unsqueeze(0)  # 添加批次维度
-    return img
+def calculate_iou(preds, targets):
+    # 确保输入为二值张量（0或1）
+    preds_bool = preds.bool()  # 若 preds 是浮点型（0.0/1.0），直接转布尔型
+    targets_bool = targets.bool()
 
+    intersection = (preds_bool & targets_bool).float().sum((1, 2))  # 按批次计算交集
+    union = (preds_bool | targets_bool).float().sum((1, 2))  # 按批次计算并集
+    iou = (intersection + 1e-6) / (union + 1e-6)  # 防止除以零
+    return iou.mean().item()  # 返回平均IoU
 
-# 3. 执行推断
-def infer_and_visualize(model, image_path, transform):
-    image_name=image_path
-    image_path = 'E:/1555bishe/archive/test/'+image_path
-    # 准备图像
-    input_image = prepare_image(image_path, transform)
+# 在验证集上评估模型
+def evaluate_model(model, valid_loader):
+    model.eval()
+    total_iou = 0.0
+    total_samples = 0
 
-    # 将图像移动到设备
-    input_image = input_image.to(device)
-    target_image = prepare_image(f'../archive/test_mask/{image_name}',transform)
     with torch.no_grad():
-        output = model(input_image)
-        output = torch.sigmoid(output)  # 应用sigmoid激活函数
-        output_thresholded = (output > 0.5).float()  # 阈值处理，得到二进制掩膜
+        for inputs, targets in valid_loader:
+            inputs = inputs.to(device)
+            targets = targets.to(device)
 
-    # 可视化结果
-    visualize_input_output_target(input_image[0], output_thresholded[0], target_image)
+            # 推理
+            outputs = model(inputs)
+            outputs = torch.sigmoid(outputs)
+            preds = (outputs > 0.5).float()  # 阈值处理
 
+            # 计算IoU
+            batch_iou = calculate_iou(preds.squeeze(1), targets.squeeze(1))
+            total_iou += batch_iou * inputs.size(0)
+            total_samples += inputs.size(0)
 
-def visualize_input_output_target(input_image, output_image, target_image=None):
-    # 将张量转换为numpy数组并从GPU移动到CPU
-    input_image = input_image.cpu().numpy()
-    output_image = output_image.cpu().numpy()
-
-    # 可视化输入和输出
-    plt.figure(figsize=(12, 6))
-
-    # 输入图像
-    plt.subplot(1, 3, 1)
-    plt.title("输入图像")
-    plt.imshow(input_image.squeeze(), cmap='gray')
-    plt.axis('off')
-
-    # 输出图像
-    plt.subplot(1, 3, 2)
-    plt.title("预测掩膜")
-    plt.imshow(output_image.squeeze(), cmap='gray')
-    plt.axis('off')
-
-    # 如果目标图像存在，则显示它
-    if target_image is not None:
-        target_image = target_image.cpu().numpy()
-        plt.subplot(1, 3, 3)
-        plt.title("实际掩膜")
-        plt.imshow(target_image.squeeze(), cmap='gray')
-        plt.axis('off')
-
-    plt.tight_layout()
-    plt.show()
+    mean_iou = total_iou / total_samples
+    return mean_iou
 
 
-# 4. 主函数
-def main_inference():
-    plt.rcParams['font.family'] = 'SimHei'  # 用来正常显示中文标签
-    model_path = 'model/resnet50_FPN_epoch_15.pth'  # 根据实际路径与文件名修改
-    model = config.backbone  # 使用之前配置的模型
-
+# 主函数
+def main():
     # 加载模型
-    model = load_model(model, model_path)
+    model = config.backbone.to(device)
+    model_path = 'model/UNet_epoch_15.pth'  # 替换为你的模型路径
+    model.load_state_dict(torch.load(model_path, map_location=device))
 
-    # 输入图像路径
-    image_path = "27_jpg.rf.b2a2b9811786cc32a23c46c560f04d07.jpg"  # 替换为您的图片路径
+    # 加载验证集
+    valid_loader =train_loader
 
-    # 进行推断并可视化
-    infer_and_visualize(model, image_path, config.transform)
+    # 评估模型
+    mean_iou = evaluate_model(model, valid_loader)
+    print(f"验证集平均IoU: {mean_iou:.4f}")
+
 
 if __name__ == '__main__':
-    main_inference()
-
-
-
+    main()
