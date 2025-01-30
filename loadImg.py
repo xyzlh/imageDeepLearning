@@ -55,7 +55,7 @@ def evaluate_model(model, valid_loader):
 def main():
     # 加载模型
     model = config.backbone.to(device)
-    model_path = 'model/UNet_epoch_15.pth'  # 替换为你的模型路径
+    model_path = 'model/UNet_epoch_1.pth'  # 替换为你的模型路径
     model.load_state_dict(torch.load(model_path, map_location=device))
 
     # 加载验证集

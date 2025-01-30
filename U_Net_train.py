@@ -72,7 +72,7 @@ config = Config(
     valid_mask_dir="../archive/valid_mask",
     backbone=smp.Unet(
         encoder_name="resnet50",
-        encoder_weights="imagenet",
+        encoder_weights=None,
         in_channels=1,
         classes=1
     ),
@@ -84,7 +84,7 @@ config = Config(
     ]),
     batchsize=4,
     lr=0.001,
-    num_epochs=15,
+    num_epochs=1,
     print_freq=1
 )
 train_dataset = TumorDataset(config.root_dir, config.train_img_dir, config.train_mask_dir, config.transform)
@@ -94,16 +94,17 @@ train_loader = DataLoader(train_dataset, batch_size=config.batchsize, shuffle=Tr
 test_loader = DataLoader(test_dataset, batch_size=config.batchsize, shuffle=False)
 valid_loader = DataLoader(valid_dataset, batch_size=config.batchsize, shuffle=False)
 from tqdm import tqdm
-def calculate_iou(preds, targets, num_classes):
-    iou_list = []
-    for cls in range(num_classes):
-        intersection = ((preds == cls) & (targets == cls)).sum().item()
-        union = ((preds == cls) | (targets == cls)).sum().item()
-        if union == 0:
-            iou_list.append(float('nan'))  # 避免除以零
-        else:
-            iou_list.append(intersection / union)
-    return torch.tensor(iou_list).mean().item()  # 返回平均 IoU
+
+
+def calculate_iou(preds, targets):
+    # 确保输入为二值张量（0或1）
+    preds_bool = preds.bool()  # 若 preds 是浮点型（0.0/1.0），直接转布尔型
+    targets_bool = targets.bool()
+
+    intersection = (preds_bool & targets_bool).float().sum((1, 2))  # 按批次计算交集
+    union = (preds_bool | targets_bool).float().sum((1, 2))  # 按批次计算并集
+    iou = (intersection + 1e-6) / (union + 1e-6)  # 防止除以零
+    return iou.mean().item()  # 返回平均IoU
 
 def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs, num_classes):
     model.to(config.device)
@@ -129,9 +130,9 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs, n
 
             running_loss += loss.item()
 
-            # 计算预测结果
-            preds = torch.argmax(outputs, dim=1)  # 获取预测的类别
-            iou = calculate_iou(preds, masks, num_classes)
+            # 修改训练和验证部分的预测逻辑
+            preds = (torch.sigmoid(outputs) > 0.5).float()  # 二值化预测结果
+            iou = calculate_iou(preds.squeeze(1), masks.squeeze(1))  # 统一维度
             running_iou += iou
 
         # 在每个 epoch 结束后，计算平均损失和 mIoU
@@ -154,8 +155,8 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs, n
                 valid_loss += loss.item()
 
                 # 计算验证集的预测结果
-                preds = torch.argmax(outputs, dim=1)
-                iou = calculate_iou(preds, masks, num_classes)
+                preds = (torch.sigmoid(outputs) > 0.5).float()  # 二值化预测结果
+                iou = calculate_iou(preds.squeeze(1), masks.squeeze(1))  # 统一维度
                 valid_iou += iou
 
         avg_valid_loss = valid_loss / len(valid_loader)
