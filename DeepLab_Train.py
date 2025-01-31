@@ -1,16 +1,16 @@
+import torch
+import segmentation_models_pytorch as smp
 import numpy as np
 import pandas as pd
 import os
-import json
-import pprint
 import matplotlib.pyplot as plt
 import cv2
-from PIL import Image
 import matplotlib.patches as patches
 import random
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
+from tqdm import tqdm
 import torch
 import os
 from PIL import Image
@@ -18,6 +18,55 @@ from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 import segmentation_models_pytorch as smp
 from torch.optim import Adam
+# 修改 Config 类的 backbone 定义
+class Config:
+    def __init__(self, device, root_dir, train_img_dir, train_mask_dir,
+                 test_img_dir, test_mask_dir, valid_img_dir, valid_mask_dir,
+                 backbone, transform, batchsize, lr, num_epochs, print_freq):
+        self.device = device  # cuda or 0 or cpu
+        self.root_dir = root_dir
+        self.train_img_dir = train_img_dir
+        self.train_mask_dir = train_mask_dir
+        self.test_img_dir = test_img_dir
+        self.test_mask_dir = test_mask_dir
+        self.valid_img_dir = valid_img_dir
+        self.valid_mask_dir = valid_mask_dir
+        self.backbone = backbone
+        self.transform = transform
+        self.batchsize = batchsize
+        self.lr = lr
+        self.num_epochs = num_epochs
+        self.print_freq = print_freq
+
+config = Config(
+    device="cuda",
+    root_dir="../archive/",
+    train_img_dir="../archive/train_img",
+    train_mask_dir="../archive/train_mask",
+    test_img_dir="../archive/test_img",
+    test_mask_dir="../archive/test_mask",
+    valid_img_dir="../archive/valid_img",
+    valid_mask_dir="../archive/valid_mask",
+    backbone=smp.DeepLabV3Plus(  # 改为 DeepLabV3+
+        encoder_name="resnet50",
+        encoder_weights="imagenet",  # 启用预训练权重
+        in_channels=1,  # 输入为单通道
+        classes=1  # 输出单通道
+    ),
+    transform=transforms.Compose([
+        transforms.Resize(224),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485], std=[0.229]),  # Assuming grayscale images
+        transforms.Lambda(lambda x: x.clamp(0, 1))
+    ]),
+    batchsize=4,
+    lr=0.001,
+    num_epochs=1,
+    print_freq=1
+)
+
+
+# 修改数据集类：确保输入为三通道（如果使用预训练权重）
 class TumorDataset(Dataset):
     def __init__(self, root_dir, img_dir, mask_dir, transform=None):
         self.root_dir = root_dir  # /kaggle/working/
@@ -46,52 +95,8 @@ class TumorDataset(Dataset):
 
         return img_gray, mask
 
-class Config:
-    def __init__(self, device, root_dir, train_img_dir, train_mask_dir,
-                 test_img_dir, test_mask_dir, valid_img_dir, valid_mask_dir,
-                 backbone, transform, batchsize, lr, num_epochs, print_freq):
-        self.device = device  # cuda or 0 or cpu
-        self.root_dir = root_dir
-        self.train_img_dir = train_img_dir
-        self.train_mask_dir = train_mask_dir
-        self.test_img_dir = test_img_dir
-        self.test_mask_dir = test_mask_dir
-        self.valid_img_dir = valid_img_dir
-        self.valid_mask_dir = valid_mask_dir
-        self.backbone = backbone
-        self.transform = transform
-        self.batchsize = batchsize
-        self.lr = lr
-        self.num_epochs = num_epochs
-        self.print_freq = print_freq
+# 其余代码保持不变（train、calculate_iou 等函数）
 
-# Change U-Net to FCN
-config = Config(
-    device="cuda",
-    root_dir="../archive/",
-    train_img_dir="../archive/train_img",
-    train_mask_dir="../archive/train_mask",
-    test_img_dir="../archive/test_img",
-    test_mask_dir="../archive/test_mask",
-    valid_img_dir="../archive/valid_img",
-    valid_mask_dir="../archive/valid_mask",
-    backbone=smp.FPN(  # Change this line to use FCN
-        encoder_name="resnet50",
-        encoder_weights="imagenet",
-        in_channels=1,
-        classes=1
-    ),
-    transform=transforms.Compose([
-        transforms.Resize(224),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485], std=[0.229]),  # Assuming grayscale images
-        transforms.Lambda(lambda x: x.clamp(0, 1))
-    ]),
-    batchsize=4,
-    lr=0.001,
-    num_epochs=1,
-    print_freq=1
-)
 train_dataset = TumorDataset(config.root_dir, config.train_img_dir, config.train_mask_dir, config.transform)
 test_dataset = TumorDataset(config.root_dir, config.test_img_dir, config.test_mask_dir, config.transform)
 valid_dataset = TumorDataset(config.root_dir, config.valid_img_dir, config.valid_mask_dir, config.transform)
@@ -167,7 +172,7 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs, n
 
         print(f'Epoch [{epoch + 1}/{num_epochs}] Average Validation Loss: {avg_valid_loss:.4f}, Average Validation Mean IoU: {avg_valid_miou:.4f}')
 
-    torch.save(model.state_dict(), f'./model/resnet50_FPN_epoch_{num_epochs}.pth')
+    torch.save(model.state_dict(), f'./model/FPN_epoch_{num_epochs}.pth')
 
 def main():
     criterion = torch.nn.BCEWithLogitsLoss()
