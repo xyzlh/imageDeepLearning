@@ -8,6 +8,7 @@ import cv2
 import matplotlib.patches as patches
 import random
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from tqdm import tqdm
@@ -61,7 +62,7 @@ config = Config(
     ]),
     batchsize=4,
     lr=0.001,
-    num_epochs=1,
+    num_epochs=5,
     print_freq=1
 )
 
@@ -103,7 +104,7 @@ valid_dataset = TumorDataset(config.root_dir, config.valid_img_dir, config.valid
 train_loader = DataLoader(train_dataset, batch_size=config.batchsize, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=config.batchsize, shuffle=False)
 valid_loader = DataLoader(valid_dataset, batch_size=config.batchsize, shuffle=False)
-from tqdm import tqdm
+
 def calculate_iou(preds, targets):
     # 确保输入为二值张量（0或1）
     preds_bool = preds.bool()  # 若 preds 是浮点型（0.0/1.0），直接转布尔型
@@ -114,7 +115,7 @@ def calculate_iou(preds, targets):
     iou = (intersection + 1e-6) / (union + 1e-6)  # 防止除以零
     return iou.mean().item()  # 返回平均IoU
 
-def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs, num_classes):
+def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     model.to(config.device)
 
     for epoch in range(num_epochs):
@@ -172,13 +173,13 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs, n
 
         print(f'Epoch [{epoch + 1}/{num_epochs}] Average Validation Loss: {avg_valid_loss:.4f}, Average Validation Mean IoU: {avg_valid_miou:.4f}')
 
-    torch.save(model.state_dict(), f'./model/FPN_epoch_{num_epochs}.pth')
+    torch.save(model.state_dict(), f'./model/DeepLabV3plus_epoch_{num_epochs}.pth')
 
 def main():
     criterion = torch.nn.BCEWithLogitsLoss()
     optimizer = Adam(config.backbone.parameters(), lr=config.lr)
     model = config.backbone
-    train(train_loader, valid_loader, model, criterion, optimizer,num_classes=1, num_epochs=config.num_epochs)
+    train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
 
 
 if __name__ == '__main__':

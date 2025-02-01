@@ -106,7 +106,7 @@ def calculate_iou(preds, targets):
     iou = (intersection + 1e-6) / (union + 1e-6)  # 防止除以零
     return iou.mean().item()  # 返回平均IoU
 
-def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs, num_classes):
+def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     model.to(config.device)
 
     for epoch in range(num_epochs):
@@ -170,7 +170,7 @@ def main():
     criterion = torch.nn.BCEWithLogitsLoss()
     optimizer = Adam(config.backbone.parameters(), lr=config.lr)
     model = config.backbone
-    train(train_loader, valid_loader, model, criterion, optimizer,num_classes=1, num_epochs=config.num_epochs)
+    train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
 
 
 if __name__ == '__main__':
