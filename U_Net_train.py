@@ -89,6 +89,9 @@ train_loader = DataLoader(train_dataset, batch_size=config.batchsize, shuffle=Tr
 test_loader = DataLoader(test_dataset, batch_size=config.batchsize, shuffle=False)
 valid_loader = DataLoader(valid_dataset, batch_size=config.batchsize, shuffle=False)
 from tqdm import tqdm
+def dice_loss(pred, target, smooth=1e-6):
+    intersection = (pred * target).sum()
+    return 1 - (2. * intersection + smooth) / (pred.sum() + target.sum() + smooth)
 
 
 def plot_metrics(epoch, train_losses, valid_losses, train_ious, valid_ious):
@@ -133,28 +136,30 @@ def calculate_iou(preds, targets):
 
 def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     model.to(config.device)
-    # 初始化指标存储
     train_losses = []
     train_ious = []
     valid_losses = []
     valid_ious = []
-    # 开启交互模式
     plt.ion()
+
     with ThreadPoolExecutor(max_workers=1) as executor:
         for epoch in range(num_epochs):
             model.train()
             running_loss = 0.0
             running_iou = 0.0
 
-            # 使用 tqdm 包装 train_loader，以显示进度条
             for i, (inputs, masks) in enumerate(
                     tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs}", unit="batch", disable=False)):
-
                 inputs = inputs.to(config.device)
                 masks = masks.to(config.device)
 
                 outputs = model(inputs)
-                loss = criterion(outputs, masks)
+
+                # 使用 sigmoid 将输出转换为概率
+                preds = torch.sigmoid(outputs)
+
+                # 计算 Dice Loss
+                loss = criterion(preds, masks)
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -162,17 +167,17 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
 
                 running_loss += loss.item()
 
-                # 修改训练和验证部分的预测逻辑
-                preds = (torch.sigmoid(outputs) > 0.5).float()  # 二值化预测结果
-                iou = calculate_iou(preds.squeeze(1), masks.squeeze(1))  # 统一维度
+                # 二值化预测结果
+                binary_preds = (preds > 0.5).float()
+                iou = calculate_iou(binary_preds.squeeze(1), masks.squeeze(1))
                 running_iou += iou
 
-            # 在每个 epoch 结束后，计算平均损失和 mIoU
             epoch_loss = running_loss / len(train_loader.dataset)
-            epoch_miou = running_iou / len(train_loader)  # 平均 IoU
+            epoch_miou = running_iou / len(train_loader)
 
             print(f"Epoch {epoch + 1}/{num_epochs}, Average Loss: {epoch_loss:.4f}, Mean IoU: {epoch_miou:.4f}")
 
+            # 验证阶段
             model.eval()
             valid_loss = 0.0
             valid_iou = 0.0
@@ -183,33 +188,35 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
                     masks = masks.to(config.device)
 
                     outputs = model(inputs)
-                    loss = criterion(outputs, masks)
+
+                    preds = torch.sigmoid(outputs)
+                    loss = criterion(preds, masks)
                     valid_loss += loss.item()
 
-                    # 计算验证集的预测结果
-                    preds = (torch.sigmoid(outputs) > 0.5).float()  # 二值化预测结果
-                    iou = calculate_iou(preds.squeeze(1), masks.squeeze(1))  # 统一维度
+                    binary_preds = (preds > 0.5).float()
+                    iou = calculate_iou(binary_preds.squeeze(1), masks.squeeze(1))
                     valid_iou += iou
 
             avg_valid_loss = valid_loss / len(valid_loader)
-            avg_valid_miou = valid_iou / len(valid_loader)  # 平均验证 IoU
+            avg_valid_miou = valid_iou / len(valid_loader)
 
-            print(f'Epoch [{epoch + 1}/{num_epochs}] Average Validation Loss: {avg_valid_loss:.4f}, Average Validation Mean IoU: {avg_valid_miou:.4f}')
+            print(
+                f'Epoch [{epoch + 1}/{num_epochs}] Average Validation Loss: {avg_valid_loss:.4f}, Average Validation Mean IoU: {avg_valid_miou:.4f}')
 
             train_losses.append(epoch_loss)
             train_ious.append(epoch_miou)
             valid_losses.append(avg_valid_loss)
             valid_ious.append(avg_valid_miou)
 
-            # 绘制实时指标
             executor.submit(plot_metrics, epoch + 1, train_losses, valid_losses, train_ious, valid_ious)
+
     # 训练结束后关闭交互模式
     plt.ioff()
     plt.show()
     torch.save(model.state_dict(), f'./model/UNet_epoch_{num_epochs}.pth')
 
 def main():
-    criterion = torch.nn.BCEWithLogitsLoss()
+    criterion = dice_loss  # 使用自定义的 Dice Loss
     optimizer = Adam(config.backbone.parameters(), lr=config.lr)
     model = config.backbone
     train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
