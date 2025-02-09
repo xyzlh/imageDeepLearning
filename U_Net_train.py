@@ -84,7 +84,7 @@ config = Config(
     ]),
     batchsize=4,
     lr=0.001,
-    num_epochs=1,
+    num_epochs=3,
     print_freq=1
 )
 train_dataset = TumorDataset(config.root_dir, config.train_img_dir, config.train_mask_dir, config.transform)
@@ -95,6 +95,36 @@ test_loader = DataLoader(test_dataset, batch_size=config.batchsize, shuffle=Fals
 valid_loader = DataLoader(valid_dataset, batch_size=config.batchsize, shuffle=False)
 from tqdm import tqdm
 
+
+def plot_metrics(epoch, train_losses, valid_losses, train_ious, valid_ious):
+    # 创建两个并排的子图
+    plt.figure(figsize=(12, 5))
+
+    # Loss曲线
+    plt.subplot(1, 2, 1)
+    plt.plot(range(1, len(train_losses) + 1),train_losses, label='Train Loss')
+    plt.plot(range(1, len(valid_losses) + 1),valid_losses, label='Valid Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Loss Curve')
+    plt.legend()
+    plt.grid(True)
+
+    # IoU曲线
+    plt.subplot(1, 2, 2)
+    plt.plot(range(1, len(train_ious) + 1),train_ious, label='Train IoU')
+    plt.plot(range(1, len(valid_ious) + 1),valid_ious, label='Valid IoU')
+    plt.xlabel('Epoch')
+    plt.ylabel('IoU')
+    plt.title('IoU Curve')
+    plt.legend()
+    plt.grid(True)
+
+    # 调整布局并显示
+    plt.tight_layout()
+    plt.draw()
+    plt.pause(0.1)  # 短暂暂停让图像更新
+    plt.close()  # 关闭当前图像，避免内存泄漏
 
 def calculate_iou(preds, targets):
     # 确保输入为二值张量（0或1）
@@ -108,7 +138,13 @@ def calculate_iou(preds, targets):
 
 def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     model.to(config.device)
-
+    # 初始化指标存储
+    train_losses = []
+    train_ious = []
+    valid_losses = []
+    valid_ious = []
+    # 开启交互模式
+    plt.ion()
     for epoch in range(num_epochs):
         model.train()
         running_loss = 0.0
@@ -164,6 +200,16 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
 
         print(f'Epoch [{epoch + 1}/{num_epochs}] Average Validation Loss: {avg_valid_loss:.4f}, Average Validation Mean IoU: {avg_valid_miou:.4f}')
 
+        train_losses.append(epoch_loss)
+        train_ious.append(epoch_miou)
+        valid_losses.append(avg_valid_loss)
+        valid_ious.append(avg_valid_miou)
+
+        # 绘制实时指标
+        plot_metrics(epoch + 1, train_losses, valid_losses, train_ious, valid_ious)
+    # 训练结束后关闭交互模式
+    plt.ioff()
+    plt.show()
     torch.save(model.state_dict(), f'./model/UNet_epoch_{num_epochs}.pth')
 
 def main():
