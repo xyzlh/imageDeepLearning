@@ -79,7 +79,7 @@ config = Config(
     ]),
     batchsize=4,
     lr=0.001,
-    num_epochs=3,
+    num_epochs=5,
     print_freq=1
 )
 train_dataset = TumorDataset(config.root_dir, config.train_img_dir, config.train_mask_dir, config.transform)
