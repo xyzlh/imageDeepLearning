@@ -145,11 +145,13 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     valid_losses = []
     valid_ious = []
     plt.ion()
-    # 替换原有的ReduceLROnPlateau
-    scheduler = CosineAnnealingLR(
+    scheduler = ReduceLROnPlateau(
         optimizer,
-        T_max=10,  # 半周期长度（epoch数）
-        eta_min=1e-6  # 最小学习率
+        mode='min',  # 'min' 或 'max'，根据监测指标选择
+        factor=0.1,  # 学习率降低的因子
+        patience=5,  # 在多少个epoch内没有改善时触发
+        verbose=True,  # 输出调度信息
+        min_lr=1e-6  # 最小学习率
     )
     with ThreadPoolExecutor(max_workers=1) as executor:
         for epoch in range(num_epochs):

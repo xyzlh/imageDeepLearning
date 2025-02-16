@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 
 from matplotlib import pyplot as plt
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from tqdm import tqdm
@@ -10,9 +11,13 @@ from PIL import Image
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 import segmentation_models_pytorch as smp
-from torch.optim import Adam
+from torch.optim import Adam, SGD
 import torch.nn as nn
 import torch.nn.functional as F
+
+from loadImg import device
+
+
 def plot_metrics(epoch, train_losses, valid_losses, train_ious, valid_ious):
     # 创建两个并排的子图
     plt.figure(figsize=(12, 5))
@@ -185,8 +190,8 @@ config = Config(
         transforms.Lambda(lambda x: x.clamp(0, 1))
     ]),
     batchsize=4,
-    lr=0.001,
-    num_epochs=5,
+    lr=0.01,
+    num_epochs=15,
     print_freq=1
 )
 
@@ -250,7 +255,15 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     valid_losses = []
     valid_ious = []
     plt.ion()
-
+    # 替换原有的ReduceLROnPlateau
+    scheduler = ReduceLROnPlateau(
+        optimizer,
+        mode='min',  # 'min' 或 'max'，根据监测指标选择
+        factor=0.5,  # 学习率降低的因子
+        patience=2,  # 在多少个epoch内没有改善时触发
+        threshold=0.001,
+        min_lr=1e-6  # 最小学习率
+    )
     with ThreadPoolExecutor(max_workers=1) as executor:
         for epoch in range(num_epochs):
             model.train()
@@ -316,18 +329,31 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
             train_ious.append(epoch_miou)
             valid_losses.append(avg_valid_loss)
             valid_ious.append(avg_valid_miou)
-
+            scheduler.step(avg_valid_loss)  # 根据验证集的损失调整学习率
             executor.submit(plot_metrics, epoch + 1, train_losses, valid_losses, train_ious, valid_ious)
 
+    # 训练结束后关闭交互模式
     plt.ioff()
     plt.show()
-    torch.save(model.state_dict(), f'./model/DeepLabV3plus_epoch_{num_epochs}.pth')
+
+    # 保存时包含模型元数据
+    torch.save({
+        'arch': 'DeepLabV3Plus_v2',
+        'encoder': 'resnet50',
+        'attention_heads': 4,
+        'state_dict': model.state_dict(),
+
+    }, f'./model/DeepLabV3plus_epoch_{num_epochs}.pth')
+
 
 
 def main():
-    criterion = dice_loss  # 使用自定义的 Dice Loss
-    optimizer = Adam(config.backbone.parameters(), lr=config.lr)
     model = config.backbone
+    criterion = dice_loss  # 使用自定义的 Dice Loss
+    optimizer = SGD(config.backbone.parameters(), lr=config.lr, momentum=0.9, weight_decay=0.0005)
+    model_path = 'model/DeepLabV3plus_epoch_15.pth'  # 替换为你的模型路径
+    model.load_state_dict(torch.load(model_path, map_location=device),strict=False)
+
 
     train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
 

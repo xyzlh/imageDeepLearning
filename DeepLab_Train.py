@@ -12,6 +12,10 @@ from torchvision import transforms
 import torch
 
 from concurrent.futures import ThreadPoolExecutor
+
+from loadImg import device
+
+
 class TumorDataset(Dataset):
     def __init__(self, root_dir, img_dir, mask_dir, transform=None):
         self.root_dir = root_dir  # /kaggle/working/
@@ -70,7 +74,7 @@ config = Config(
     valid_img_dir="../archive/valid_img",
     valid_mask_dir="../archive/valid_mask",
     backbone=smp.DeepLabV3Plus(
-        encoder_name="resnet50",
+        encoder_name="efficientnet-b4",
         encoder_weights='imagenet',
         in_channels=1,
         classes=1
@@ -82,7 +86,7 @@ config = Config(
         transforms.Lambda(lambda x: x.clamp(0, 1))
     ]),
     batchsize=4,
-    lr=0.0001,
+    lr=1e-2,
     num_epochs=15,
     print_freq=1
 )
@@ -146,10 +150,13 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     valid_ious = []
     plt.ion()
     # 替换原有的ReduceLROnPlateau
-    scheduler = CosineAnnealingLR(
+    scheduler = ReduceLROnPlateau(
         optimizer,
-        T_max=10,  # 半周期长度（epoch数）
-        eta_min=1e-6  # 最小学习率
+        mode='min',  # 'min' 或 'max'，根据监测指标选择
+        factor=0.5,  # 学习率降低的因子
+        patience=2,  # 在多少个epoch内没有改善时触发
+        threshold=0.001,
+        min_lr=1e-6  # 最小学习率
     )
     with ThreadPoolExecutor(max_workers=1) as executor:
         for epoch in range(num_epochs):
@@ -222,16 +229,13 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     # 训练结束后关闭交互模式
     plt.ioff()
     plt.show()
-    torch.save(model.state_dict(), f'DeepLabV3plus_epoch_{num_epochs}.pth')
+    torch.save(model.state_dict(), f'./model/DeepLabV3plus_epoch_{num_epochs}.pth')
+
 
 def main():
     criterion = dice_loss  # 使用自定义的 Dice Loss
     model = config.backbone
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=1e-4,  # 初始学习率调整为更小值
-        weight_decay=1e-4  # 更合适的权重衰减
-    )
+    optimizer = SGD(config.backbone.parameters(), lr=config.lr, momentum=0.9, weight_decay=0.0005)
     train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
 
 
