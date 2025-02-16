@@ -3,15 +3,14 @@ import os
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor
 import matplotlib.pyplot as plt
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 import torch
 import timm
 import torch.nn as nn
 from tqdm import tqdm
-from torch.optim import Adam, SGD
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-
+from torch.optim import Adam
 def plot_metrics(epoch, train_losses, valid_losses, train_ious, valid_ious):
     # 创建两个并排的子图
     plt.figure(figsize=(12, 5))
@@ -163,7 +162,7 @@ config = Config(
         transforms.Lambda(lambda x: x.clamp(0, 1))
     ]),
     batchsize=4,
-    lr=0.0001,
+    lr=0.001,
     num_epochs=15,
     print_freq=1
 )
@@ -192,13 +191,12 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     valid_losses = []
     valid_ious = []
     plt.ion()
-    # 替换原有的ReduceLROnPlateau
     scheduler = ReduceLROnPlateau(
         optimizer,
         mode='min',  # 'min' 或 'max'，根据监测指标选择
-        factor=0.5,  # 学习率降低的因子
-        patience=2,  # 在多少个epoch内没有改善时触发
-        threshold=0.001,
+        factor=0.1,  # 学习率降低的因子
+        patience=5,  # 在多少个epoch内没有改善时触发
+        verbose=True,  # 输出调度信息
         min_lr=1e-6  # 最小学习率
     )
     with ThreadPoolExecutor(max_workers=1) as executor:
@@ -262,11 +260,12 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
             print(
                 f'Epoch [{epoch + 1}/{num_epochs}] Average Validation Loss: {avg_valid_loss:.4f}, Average Validation Mean IoU: {avg_valid_miou:.4f}')
 
+            scheduler.step(avg_valid_loss)  # 根据验证集的损失调整学习率
+
             train_losses.append(epoch_loss)
             train_ious.append(epoch_miou)
             valid_losses.append(avg_valid_loss)
             valid_ious.append(avg_valid_miou)
-            scheduler.step(avg_valid_loss)  # 根据验证集的损失调整学习率
             executor.submit(plot_metrics, epoch + 1, train_losses, valid_losses, train_ious, valid_ious)
 
     # 训练结束后关闭交互模式
@@ -276,9 +275,11 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
 
 def main():
     criterion = dice_loss  # 使用自定义的 Dice Loss
-    optimizer = SGD(config.backbone.parameters(), lr=config.lr, momentum=0.9, weight_decay=0.0005)
+
+
 
     model = config.backbone
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
     train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
 
 if __name__ == '__main__':
