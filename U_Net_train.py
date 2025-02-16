@@ -1,7 +1,11 @@
-
 import os
 from PIL import Image
 import matplotlib.pyplot as plt
+from torch import nn
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import CosineAnnealingLR
+import segmentation_models_pytorch as smp
+from torch.optim import Adam, SGD
 
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
@@ -54,7 +58,7 @@ class Config:
         self.num_epochs = num_epochs
         self.print_freq = print_freq
 import segmentation_models_pytorch as smp
-from torch.optim import Adam
+from torch.optim import Adam, SGD
 
 config = Config(
     device="cuda",
@@ -66,8 +70,8 @@ config = Config(
     valid_img_dir="../archive/valid_img",
     valid_mask_dir="../archive/valid_mask",
     backbone=smp.Unet(
-        encoder_name="resnet50",
-        encoder_weights=None,
+        encoder_name="efficientnet-b4",
+        encoder_weights='imagenet',
         in_channels=1,
         classes=1
     ),
@@ -78,8 +82,8 @@ config = Config(
         transforms.Lambda(lambda x: x.clamp(0, 1))
     ]),
     batchsize=4,
-    lr=0.001,
-    num_epochs=5,
+    lr=0.0001,
+    num_epochs=15,
     print_freq=1
 )
 train_dataset = TumorDataset(config.root_dir, config.train_img_dir, config.train_mask_dir, config.transform)
@@ -141,7 +145,12 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     valid_losses = []
     valid_ious = []
     plt.ion()
-
+    # 替换原有的ReduceLROnPlateau
+    scheduler = CosineAnnealingLR(
+        optimizer,
+        T_max=10,  # 半周期长度（epoch数）
+        eta_min=1e-6  # 最小学习率
+    )
     with ThreadPoolExecutor(max_workers=1) as executor:
         for epoch in range(num_epochs):
             model.train()
@@ -207,7 +216,7 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
             train_ious.append(epoch_miou)
             valid_losses.append(avg_valid_loss)
             valid_ious.append(avg_valid_miou)
-
+            scheduler.step(avg_valid_loss)  # 根据验证集的损失调整学习率
             executor.submit(plot_metrics, epoch + 1, train_losses, valid_losses, train_ious, valid_ious)
 
     # 训练结束后关闭交互模式
@@ -217,8 +226,12 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
 
 def main():
     criterion = dice_loss  # 使用自定义的 Dice Loss
-    optimizer = Adam(config.backbone.parameters(), lr=config.lr)
     model = config.backbone
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=1e-4,  # 初始学习率调整为更小值
+        weight_decay=1e-4  # 更合适的权重衰减
+    )
     train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
 
 

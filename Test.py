@@ -11,10 +11,8 @@ from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 import segmentation_models_pytorch as smp
 from torch.optim import Adam
-
-from loadImg import device
-
-
+import torch.nn as nn
+import torch.nn.functional as F
 def plot_metrics(epoch, train_losses, valid_losses, train_ious, valid_ious):
     # 创建两个并排的子图
     plt.figure(figsize=(12, 5))
@@ -64,6 +62,106 @@ class Config:
         self.num_epochs = num_epochs
         self.print_freq = print_freq
 
+
+
+
+class MultiHeadAttentionBlock(nn.Module):
+    def __init__(self, in_channels, num_heads=4, reduction_ratio=4):
+        super().__init__()
+        assert in_channels % num_heads == 0, "输入通道数必须能被头数整除"
+
+        self.num_heads = num_heads
+        self.head_dim = in_channels // num_heads
+
+        # 通道注意力（保持原设计）
+        self.channel_att = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(in_channels, in_channels // reduction_ratio, kernel_size=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels // reduction_ratio, in_channels, kernel_size=1),
+            nn.Sigmoid()
+        )
+
+        # 空间注意力（调整为多头兼容）
+        self.spatial_att = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels // reduction_ratio, kernel_size=1),
+            nn.Conv2d(in_channels // reduction_ratio, num_heads, kernel_size=3, padding=1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+
+        # 通道注意力
+        channel_att = self.channel_att(x)
+
+        # 空间注意力
+        spatial_att = self.spatial_att(x)  # [B, num_heads, H, W]
+        spatial_att = spatial_att.unsqueeze(2)  # [B, num_heads, 1, H, W]
+
+        # 分解到多头
+        x = x.view(B, self.num_heads, self.head_dim, H, W)  # [B, H, C/H, H, W]
+
+        # 应用注意力
+        attended = x * spatial_att
+        attended = attended.view(B, C, H, W)
+
+        return attended * channel_att + x  # 残差连接
+class CustomDeepLabV3Plus(smp.DeepLabV3Plus):
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        # 在ASPP后添加多头注意力
+        self.aspp_attention = MultiHeadAttentionBlock(
+            in_channels=256,  # 匹配ASPP输出通道数
+            num_heads=4
+        )
+
+
+        # 替换原始解码器
+        self._decoder = nn.Sequential(
+            MultiHeadAttentionBlock(in_channels=256 + 48),
+            nn.Conv2d(256 + 48, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU()
+        )
+
+        # 保持原始解码器参数
+        self.conv1 = nn.Conv2d(256, 48, 1, bias=False)
+        self.bn1 = nn.BatchNorm2d(48)
+        self.relu = nn.ReLU()
+        def forward(self, x):
+            """修改后的前向传播逻辑"""
+            # 获取编码器特征
+            features = self.encoder(x)
+
+            # ASPP处理
+            aspp_output = self.aspp(features[-1])
+            aspp_output = self.aspp_attention(aspp_output)  # 添加注意力
+
+            # 解码器特征融合
+            low_level_features = features[0]  # 来自ResNet的layer1
+            decoder_output = self.decoder(aspp_output, low_level_features)
+
+            # 上采样和输出
+            masks = self.segmentation_head(decoder_output)
+            if self.upsampling == 8:
+                masks = F.interpolate(masks, scale_factor=8, mode='bilinear', align_corners=True)
+            return masks
+
+        @property
+        def decoder(self):
+            """动态返回解码器组件"""
+            return self._decoder
+
+        @decoder.setter
+        def decoder(self, value):
+            """保留原始解码器接口"""
+            self._decoder = value
 config = Config(
     device="cuda",
     root_dir="../archive/",
@@ -73,7 +171,7 @@ config = Config(
     test_mask_dir="../archive/test_mask",
     valid_img_dir="../archive/valid_img",
     valid_mask_dir="../archive/valid_mask",
-    backbone=smp.DeepLabV3Plus(  # 改为 DeepLabV3+
+    backbone=CustomDeepLabV3Plus(  # 改为 DeepLabV3+
         encoder_name="resnet50",
         encoder_weights="imagenet",  # 启用预训练权重
         in_channels=1,  # 输入为单通道
@@ -229,10 +327,7 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
 def main():
     criterion = dice_loss  # 使用自定义的 Dice Loss
     optimizer = Adam(config.backbone.parameters(), lr=config.lr)
-
-    model = config.backbone.to(device)
-    model_path = 'model/DeepLabV3plus_epoch_5.pth'  # 替换为你的模型路径
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    model = config.backbone
 
     train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
 
