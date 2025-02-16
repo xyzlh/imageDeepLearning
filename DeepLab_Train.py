@@ -1,6 +1,14 @@
-from concurrent.futures import ThreadPoolExecutor
-
-from matplotlib import pyplot as plt
+import torch
+import segmentation_models_pytorch as smp
+import numpy as np
+import pandas as pd
+import os
+import matplotlib.pyplot as plt
+import cv2
+import matplotlib.patches as patches
+import random
+import matplotlib.pyplot as plt
+from tqdm import tqdm
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from tqdm import tqdm
@@ -11,39 +19,6 @@ from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 import segmentation_models_pytorch as smp
 from torch.optim import Adam
-
-from loadImg import device
-
-
-def plot_metrics(epoch, train_losses, valid_losses, train_ious, valid_ious):
-    # 创建两个并排的子图
-    plt.figure(figsize=(12, 5))
-
-    # Loss曲线
-    plt.subplot(1, 2, 1)
-    plt.plot(range(1, len(train_losses) + 1),train_losses, label='Train Loss')
-    plt.plot(range(1, len(valid_losses) + 1),valid_losses, label='Valid Loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title('Loss Curve')
-    plt.legend()
-    plt.grid(True)
-
-    # IoU曲线
-    plt.subplot(1, 2, 2)
-    plt.plot(range(1, len(train_ious) + 1),train_ious, label='Train IoU')
-    plt.plot(range(1, len(valid_ious) + 1),valid_ious, label='Valid IoU')
-    plt.xlabel('Epoch')
-    plt.ylabel('IoU')
-    plt.title('IoU Curve')
-    plt.legend()
-    plt.grid(True)
-
-    # 调整布局并显示
-    plt.tight_layout()
-    plt.draw()
-    plt.pause(0.1)  # 短暂暂停让图像更新
-    plt.close()  # 关闭当前图像，避免内存泄漏
 # 修改 Config 类的 backbone 定义
 class Config:
     def __init__(self, device, root_dir, train_img_dir, train_mask_dir,
@@ -79,7 +54,6 @@ config = Config(
         in_channels=1,  # 输入为单通道
         classes=1  # 输出单通道
     ),
-
     transform=transforms.Compose([
         transforms.Resize(224),
         transforms.ToTensor(),
@@ -130,9 +104,6 @@ valid_dataset = TumorDataset(config.root_dir, config.valid_img_dir, config.valid
 train_loader = DataLoader(train_dataset, batch_size=config.batchsize, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=config.batchsize, shuffle=False)
 valid_loader = DataLoader(valid_dataset, batch_size=config.batchsize, shuffle=False)
-def dice_loss(pred, target, smooth=1e-6):
-    intersection = (pred * target).sum()
-    return 1 - (2. * intersection + smooth) / (pred.sum() + target.sum() + smooth)
 
 def calculate_iou(preds, targets):
     # 确保输入为二值张量（0或1）
@@ -144,94 +115,72 @@ def calculate_iou(preds, targets):
     iou = (intersection + 1e-6) / (union + 1e-6)  # 防止除以零
     return iou.mean().item()  # 返回平均IoU
 
-
 def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     model.to(config.device)
-    train_losses = []
-    train_ious = []
-    valid_losses = []
-    valid_ious = []
-    plt.ion()
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        for epoch in range(num_epochs):
-            model.train()
-            running_loss = 0.0
-            running_iou = 0.0
+    for epoch in range(num_epochs):
+        model.train()
+        running_loss = 0.0
+        running_iou = 0.0
 
-            for i, (inputs, masks) in enumerate(
-                    tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs}", unit="batch", disable=False)):
+        # 使用 tqdm 包装 train_loader，以显示进度条
+        for i, (inputs, masks) in enumerate(
+                tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs}", unit="batch", disable=False)):
+
+            inputs = inputs.to(config.device)
+            masks = masks.to(config.device)
+
+            outputs = model(inputs)
+            loss = criterion(outputs, masks)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            running_loss += loss.item()
+
+            # 计算预测结果
+            preds = (torch.sigmoid(outputs) > 0.5).float()  # 二值化预测结果
+            iou = calculate_iou(preds.squeeze(1), masks.squeeze(1))  # 统一维度
+            running_iou += iou
+
+        # 在每个 epoch 结束后，计算平均损失和 mIoU
+        epoch_loss = running_loss / len(train_loader.dataset)
+        epoch_miou = running_iou / len(train_loader)  # 平均 IoU
+
+        print(f"Epoch {epoch + 1}/{num_epochs}, Average Loss: {epoch_loss:.4f}, Mean IoU: {epoch_miou:.4f}")
+
+        model.eval()
+        valid_loss = 0.0
+        valid_iou = 0.0
+
+        with torch.no_grad():
+            for inputs, masks in valid_loader:
                 inputs = inputs.to(config.device)
                 masks = masks.to(config.device)
 
                 outputs = model(inputs)
+                loss = criterion(outputs, masks)
+                valid_loss += loss.item()
 
-                # 使用 sigmoid 将输出转换为概率
-                preds = torch.sigmoid(outputs)
+                # 计算验证集的预测结果
+                preds = (torch.sigmoid(outputs) > 0.5).float()  # 二值化预测结果
+                iou = calculate_iou(preds.squeeze(1), masks.squeeze(1))  # 统一维度
+                valid_iou += iou
 
-                # 计算 Dice Loss
-                loss = criterion(preds, masks)
+        avg_valid_loss = valid_loss / len(valid_loader)
+        avg_valid_miou = valid_iou / len(valid_loader)  # 平均验证 IoU
 
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+        print(f'Epoch [{epoch + 1}/{num_epochs}] Average Validation Loss: {avg_valid_loss:.4f}, Average Validation Mean IoU: {avg_valid_miou:.4f}')
 
-                running_loss += loss.item()
-
-                # 二值化预测结果
-                binary_preds = (preds > 0.5).float()
-                iou = calculate_iou(binary_preds.squeeze(1), masks.squeeze(1))
-                running_iou += iou
-
-            epoch_loss = running_loss / len(train_loader.dataset)
-            epoch_miou = running_iou / len(train_loader)
-
-            print(f"Epoch {epoch + 1}/{num_epochs}, Average Loss: {epoch_loss:.4f}, Mean IoU: {epoch_miou:.4f}")
-
-            # 验证阶段
-            model.eval()
-            valid_loss = 0.0
-            valid_iou = 0.0
-
-            with torch.no_grad():
-                for inputs, masks in valid_loader:
-                    inputs = inputs.to(config.device)
-                    masks = masks.to(config.device)
-
-                    outputs = model(inputs)
-
-                    preds = torch.sigmoid(outputs)
-                    loss = criterion(preds, masks)
-                    valid_loss += loss.item()
-
-                    binary_preds = (preds > 0.5).float()
-                    iou = calculate_iou(binary_preds.squeeze(1), masks.squeeze(1))
-                    valid_iou += iou
-
-            avg_valid_loss = valid_loss / len(valid_loader)
-            avg_valid_miou = valid_iou / len(valid_loader)
-
-            print(
-                f'Epoch [{epoch + 1}/{num_epochs}] Average Validation Loss: {avg_valid_loss:.4f}, Average Validation Mean IoU: {avg_valid_miou:.4f}')
-
-            train_losses.append(epoch_loss)
-            train_ious.append(epoch_miou)
-            valid_losses.append(avg_valid_loss)
-            valid_ious.append(avg_valid_miou)
-
-            executor.submit(plot_metrics, epoch + 1, train_losses, valid_losses, train_ious, valid_ious)
-
-    plt.ioff()
-    plt.show()
     torch.save(model.state_dict(), f'./model/DeepLabV3plus_epoch_{num_epochs}.pth')
 
-
 def main():
-    criterion = dice_loss  # 使用自定义的 Dice Loss
+    criterion = torch.nn.BCEWithLogitsLoss()
     optimizer = Adam(config.backbone.parameters(), lr=config.lr)
-
     model = config.backbone
     train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
+
 
 if __name__ == '__main__':
     main()
