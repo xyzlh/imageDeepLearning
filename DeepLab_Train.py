@@ -230,10 +230,7 @@ def main():
     criterion = dice_loss  # 使用自定义的 Dice Loss
     optimizer = Adam(config.backbone.parameters(), lr=config.lr)
 
-    model = config.backbone.to(device)
-    model_path = 'model/DeepLabV3plus_epoch_5.pth'  # 替换为你的模型路径
-    model.load_state_dict(torch.load(model_path, map_location=device))
-
+    model = config.backbone
     train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
 
 if __name__ == '__main__':
