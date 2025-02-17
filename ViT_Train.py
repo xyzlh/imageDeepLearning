@@ -77,8 +77,9 @@ class TumorDataset(Dataset):
 class ViTSeg(nn.Module):
     def __init__(self, num_classes=1, img_size=224):
         super().__init__()
+        # 使用 "vit_base_patch16_224" 模型
         self.vit = timm.create_model(
-            "vit_tiny_patch16_224",
+            "vit_base_patch16_224",  # 修改为 vit_base
             pretrained=True,
             in_chans=1,
             img_size=img_size
@@ -87,12 +88,14 @@ class ViTSeg(nn.Module):
         del self.vit.cls_token
         self.vit.pos_embed = nn.Parameter(self.vit.pos_embed[:, 1:, :])
         self._freeze_layers(6)
+
+        # 根据模型的输出通道数量调整解码器
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(192, 128, 4, 4),
-            nn.BatchNorm2d(128),
+            nn.ConvTranspose2d(768, 256, kernel_size=4, stride=4),  # viT Base 通常有768个输出通道
+            nn.BatchNorm2d(256),
             nn.GELU(),
-            nn.Conv2d(128, 64, 3, padding=1),
-            nn.ConvTranspose2d(64, num_classes, 4, 4)
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),
+            nn.ConvTranspose2d(128, num_classes, kernel_size=4, stride=4)  # 输出通道为 num_classes
         )
 
     def _adapt_first_conv(self):
@@ -126,13 +129,12 @@ class ViTSeg(nn.Module):
 
 # ==================== 配置模型 ====================
 class Config:
-    def __init__(self, device, root_dir, train_img_dir, train_mask_dir, test_img_dir, test_mask_dir, valid_img_dir, valid_mask_dir, backbone, transform, batchsize, lr, num_epochs, print_freq):
+    def __init__(self, device, root_dir, train_img_dir, train_mask_dir,  valid_img_dir, valid_mask_dir, backbone, transform, batchsize, lr, num_epochs, print_freq):
         self.device = device  # cuda or cpu
         self.root_dir = root_dir
         self.train_img_dir = train_img_dir
         self.train_mask_dir = train_mask_dir
-        self.test_img_dir = test_img_dir
-        self.test_mask_dir = test_mask_dir
+
         self.valid_img_dir = valid_img_dir
         self.valid_mask_dir = valid_mask_dir
         self.backbone = backbone
@@ -147,8 +149,7 @@ config = Config(
     root_dir="../archive/",
     train_img_dir="../archive/train_img",
     train_mask_dir="../archive/train_mask",
-    test_img_dir="../archive/test_img",
-    test_mask_dir="../archive/test_mask",
+
     valid_img_dir="../archive/valid_img",
     valid_mask_dir="../archive/valid_mask",
     backbone=ViTSeg(
@@ -169,10 +170,8 @@ config = Config(
 
 # 创建数据加载器
 train_dataset = TumorDataset(config.root_dir, config.train_img_dir, config.train_mask_dir, config.transform)
-test_dataset = TumorDataset(config.root_dir, config.test_img_dir, config.test_mask_dir, config.transform)
 valid_dataset = TumorDataset(config.root_dir, config.valid_img_dir, config.valid_mask_dir, config.transform)
 train_loader = DataLoader(train_dataset, batch_size=config.batchsize, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=config.batchsize, shuffle=False)
 valid_loader = DataLoader(valid_dataset, batch_size=config.batchsize, shuffle=False)
 
 # ==================== 训练和验证 ====================
