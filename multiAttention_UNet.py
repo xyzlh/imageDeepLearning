@@ -4,7 +4,7 @@ import os
 from PIL import Image
 import matplotlib.pyplot as plt
 from torch import nn
-from torch.cuda.amp import GradScaler
+from torch.cuda.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import segmentation_models_pytorch as smp
@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 import torch
 from concurrent.futures import ThreadPoolExecutor
-
+from tqdm import tqdm
 
 # 多头注意力模块：使用 AMP 以后，混合精度计算可加速训练
 class MultiHeadAttentionBlock(nn.Module):
@@ -145,6 +145,9 @@ class Config:
         self.num_epochs = num_epochs
         self.print_freq = print_freq
 
+# 定义 clamp_image 函数以替换 lambda，确保可以被 pickle
+def clamp_image(x):
+    return x.clamp(0, 1)
 
 # 配置初始化
 config = Config(
@@ -167,14 +170,14 @@ config = Config(
         pool_size=14
     ),
     transform=transforms.Compose([
-        transforms.Resize(224),
+        transforms.Resize(256),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485], std=[0.229]),  # 针对灰度图：1通道
-        transforms.Lambda(lambda x: x.clamp(0, 1))
+        transforms.Lambda(clamp_image)
     ]),
     batchsize=4,
     lr=1e-4,
-    num_epochs=15,
+    num_epochs=25,
     print_freq=1
 )
 
@@ -238,7 +241,7 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     train_losses, train_ious = [], []
     valid_losses, valid_ious = [], []
     plt.ion()
-    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5, verbose=True, min_lr=1e-6)
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, min_lr=1e-6)
 
     # 使用线程池异步绘图，避免阻塞训练
     with ThreadPoolExecutor(max_workers=1) as executor:
@@ -247,7 +250,8 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
             running_loss = 0.0
             running_iou = 0.0
 
-            for inputs, masks in train_loader:
+            for i, (inputs, masks) in enumerate(
+                    tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs}", unit="batch", disable=False)):
                 inputs = inputs.to(config.device, non_blocking=True)
                 masks = masks.to(config.device, non_blocking=True)
 
@@ -297,8 +301,21 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     plt.ioff()
     plt.show()
 
-    torch.save(model.state_dict(), f'./model/UNet_epoch_{num_epochs}.pth')
+    torch.save(model.state_dict(), f'./model/Atten_UNet_epoch_{num_epochs}.pth')
 
+def load_train():
+    criterion = dice_loss  # 使用自定义的 Dice Loss
+    model = config.backbone
+    model_path = 'model/UNet_epoch_25.pth'  # 替换为你的模型路径
+    model.load_state_dict(torch.load(model_path))
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=1e-4,  # 初始学习率调整为更小值
+        weight_decay=1e-4  # 更合适的权重衰减
+    )
+    train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
+    epo=config.num_epochs+25
+    os.rename('./model/UNet_epoch_25.pth', f'./model/UNet_epoch_{epo}.pth')
 
 def main():
     criterion = dice_loss  # 使用自定义的 Dice Loss
