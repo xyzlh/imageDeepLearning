@@ -201,6 +201,7 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
         min_lr=1e-6  # 最小学习率
     )
     with ThreadPoolExecutor(max_workers=1) as executor:
+        scaler = torch.amp.GradScaler('cuda')
         for epoch in range(num_epochs):
             model.train()
             running_loss = 0.0
@@ -210,19 +211,14 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
                     tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs}", unit="batch", disable=False)):
                 inputs = inputs.to(config.device)
                 masks = masks.to(config.device)
-
-                outputs = model(inputs)
-
-                # 使用 sigmoid 将输出转换为概率
-                preds = torch.sigmoid(outputs)
-
-                # 计算 Dice Loss
-                loss = criterion(preds, masks)
-
                 optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
+                with torch.cuda.amp.autocast():
+                    outputs = model(inputs)
+                    preds = torch.sigmoid(outputs)
+                    loss = criterion(preds, masks)
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
                 running_loss += loss.item()
 
                 # 二值化预测结果

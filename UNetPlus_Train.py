@@ -77,7 +77,7 @@ config = Config(
     valid_img_dir="../archive/valid_img",
     valid_mask_dir="../archive/valid_mask",
     backbone=smp.UnetPlusPlus(
-        encoder_name="resnet50",
+        encoder_name="mobilenet_v2",
         encoder_weights='imagenet',
         in_channels=1,
         classes=1
@@ -88,7 +88,7 @@ config = Config(
         transforms.Normalize(mean=[0.485], std=[0.229]),  # Assuming grayscale images
         transforms.Lambda(clamp_transform)
     ]),
-    batchsize=8,
+    batchsize=16,
     lr=1e-4,
     num_epochs=15,
     print_freq=1
@@ -160,6 +160,7 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
         min_lr=1e-6  # 最小学习率
     )
     with ThreadPoolExecutor(max_workers=1) as executor:
+        scaler = torch.amp.GradScaler('cuda')
         for epoch in range(num_epochs):
             model.train()
             running_loss = 0.0
@@ -169,19 +170,14 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
                     tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs}", unit="batch", disable=False)):
                 inputs = inputs.to(config.device)
                 masks = masks.to(config.device)
-
-                outputs = model(inputs)
-
-                # 使用 sigmoid 将输出转换为概率
-                preds = torch.sigmoid(outputs)
-
-                # 计算 Dice Loss
-                loss = criterion(preds, masks)
-
                 optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
+                with torch.cuda.amp.autocast():
+                    outputs = model(inputs)
+                    preds = torch.sigmoid(outputs)
+                    loss = criterion(preds, masks)
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
                 running_loss += loss.item()
 
                 # 二值化预测结果
@@ -235,9 +231,17 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
 def main():
     criterion = dice_loss  # 使用自定义的 Dice Loss
     model = config.backbone
-    optimizer = SGD(config.backbone.parameters(), lr=1e-2, momentum=0.9, weight_decay=0.0005)
+    optimizer = SGD(config.backbone.parameters(), lr=1e-3, momentum=0.9, weight_decay=0.0005)
     train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
 
 
+def load_train():
+    model_path = f'./model/UNetPlus_epoch_15.pth'
+    criterion = dice_loss  # 使用自定义的 Dice Loss
+    model = config.backbone
+    model.load_state_dict(torch.load(model_path))
+    optimizer = SGD(config.backbone.parameters(), lr=1e-3, momentum=0.9, weight_decay=0.0005)
+    train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
+    os.rename(model_path, f'./model/UNetPlus_epoch_{config.num_epochs+15}')
 if __name__ == '__main__':
     main()
