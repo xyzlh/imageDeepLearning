@@ -5,13 +5,17 @@ from torch import nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import segmentation_models_pytorch as smp
-from torch.optim import Adam, SGD
-
+from torch.optim import Adam, SGD, AdamW
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 import torch
 
 from concurrent.futures import ThreadPoolExecutor
+
+
+
+
 class TumorDataset(Dataset):
     def __init__(self, root_dir, img_dir, mask_dir, transform=None):
         self.root_dir = root_dir  # /kaggle/working/
@@ -59,6 +63,9 @@ class Config:
         self.print_freq = print_freq
 import segmentation_models_pytorch as smp
 from torch.optim import Adam, SGD
+# 封装 clamp 函数
+def clamp_transform(x):
+    return x.clamp(0, 1)
 
 config = Config(
     device="cuda",
@@ -79,7 +86,7 @@ config = Config(
         transforms.Resize(224),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485], std=[0.229]),  # Assuming grayscale images
-        transforms.Lambda(lambda x: x.clamp(0, 1))
+        transforms.Lambda(clamp_transform)
     ]),
     batchsize=4,
     lr=0.0001,
@@ -89,9 +96,9 @@ config = Config(
 train_dataset = TumorDataset(config.root_dir, config.train_img_dir, config.train_mask_dir, config.transform)
 test_dataset = TumorDataset(config.root_dir, config.test_img_dir, config.test_mask_dir, config.transform)
 valid_dataset = TumorDataset(config.root_dir, config.valid_img_dir, config.valid_mask_dir, config.transform)
-train_loader = DataLoader(train_dataset, batch_size=config.batchsize, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=config.batchsize, shuffle=False)
-valid_loader = DataLoader(valid_dataset, batch_size=config.batchsize, shuffle=False)
+train_loader = DataLoader(train_dataset, batch_size=config.batchsize, shuffle=True,num_workers=4,pin_memory=True)
+test_loader = DataLoader(test_dataset, batch_size=config.batchsize, shuffle=False,num_workers=4,pin_memory=True)
+valid_loader = DataLoader(valid_dataset, batch_size=config.batchsize, shuffle=False,num_workers=4,pin_memory=True)
 from tqdm import tqdm
 def dice_loss(pred, target, smooth=1e-6):
     intersection = (pred * target).sum()
@@ -99,6 +106,7 @@ def dice_loss(pred, target, smooth=1e-6):
 
 
 def plot_metrics(epoch, train_losses, valid_losses, train_ious, valid_ious):
+    plt.clf()  # 清空当前图形
     # 创建两个并排的子图
     plt.figure(figsize=(12, 5))
 
@@ -126,7 +134,7 @@ def plot_metrics(epoch, train_losses, valid_losses, train_ious, valid_ious):
     plt.tight_layout()
     plt.draw()
     plt.pause(0.1)  # 短暂暂停让图像更新
-    plt.close()  # 关闭当前图像，避免内存泄漏
+    plt.close()
 
 def calculate_iou(preds, targets):
     # 确保输入为二值张量（0或1）
@@ -146,12 +154,10 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     valid_ious = []
     plt.ion()
     scheduler = ReduceLROnPlateau(
-        optimizer,
-        mode='min',  # 'min' 或 'max'，根据监测指标选择
-        factor=0.1,  # 学习率降低的因子
-        patience=5,  # 在多少个epoch内没有改善时触发
-        verbose=True,  # 输出调度信息
-        min_lr=1e-6  # 最小学习率
+        optimizer,  # 绑定的优化器
+        mode='min',  # 监控指标的模式（最小化损失）
+        factor=0.5,  # 学习率衰减因子（新学习率 = 原学习率 * factor）
+        patience=2,  # 等待epoch数（无改善后触发衰减）
     )
     with ThreadPoolExecutor(max_workers=1) as executor:
         for epoch in range(num_epochs):
@@ -226,16 +232,32 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     plt.show()
     torch.save(model.state_dict(), f'./model/UNet_epoch_{num_epochs}.pth')
 
+
 def main():
     criterion = dice_loss  # 使用自定义的 Dice Loss
+
     model = config.backbone
-    optimizer = torch.optim.AdamW(
+    optimizer = AdamW(
         model.parameters(),
-        lr=1e-4,  # 初始学习率调整为更小值
-        weight_decay=1e-4  # 更合适的权重衰减
+        lr=1e-4,  # 初始学习率
+        weight_decay=1e-4  # 权重衰减
+    )
+    train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
+
+def load_train():
+    criterion = dice_loss  # 使用自定义的 Dice Loss
+
+    model = config.backbone
+    model_path = 'model/UNet_epoch_15.pth'  # 替换为你的模型路径
+    model.load_state_dict(torch.load(model_path))
+
+    optimizer = AdamW(
+        model.parameters(),
+        lr=3e-4,  # 初始学习率
+        weight_decay=1e-4  # 权重衰减
     )
     train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
 
 
 if __name__ == '__main__':
-    main()
+    load_train()

@@ -55,15 +55,15 @@ def evaluate_model(model, valid_loader):
 def main():
     # 加载模型
     model = config.backbone.to(device)
-    model_path = 'model/UNet_epoch_1.pth'  # 替换为你的模型路径
+    model_path = 'model/UNet_epoch_30.pth'  # 替换为你的模型路径
     model.load_state_dict(torch.load(model_path, map_location=device))
 
     # 加载验证集
-    valid_loader =train_loader
+    valid_loader =test_loader
 
     # 评估模型
     mean_iou = evaluate_model(model, valid_loader)
-    print(f"验证集平均IoU: {mean_iou:.4f}")
+    print(f"测试集平均IoU: {mean_iou:.4f}")
 
 
 if __name__ == '__main__':

@@ -43,6 +43,9 @@ def plot_metrics(epoch, train_losses, valid_losses, train_ious, valid_ious):
 def dice_loss(pred, target, smooth=1e-6):
     intersection = (pred * target).sum()
     return 1 - (2. * intersection + smooth) / (pred.sum() + target.sum() + smooth)
+# 封装 clamp 函数
+def clamp_transform(x):
+    return x.clamp(0, 1)
 
 # ==================== 数据集 ====================
 class TumorDataset(Dataset):
@@ -160,19 +163,19 @@ config = Config(
         transforms.Resize(224),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485], std=[0.229]),  # 假设灰度图像
-        transforms.Lambda(lambda x: x.clamp(0, 1))
+        transforms.Lambda(clamp_transform)
     ]),
-    batchsize=4,
+    batchsize=8,
     lr=0.001,
-    num_epochs=15,
+    num_epochs=25,
     print_freq=1
 )
 
 # 创建数据加载器
 train_dataset = TumorDataset(config.root_dir, config.train_img_dir, config.train_mask_dir, config.transform)
 valid_dataset = TumorDataset(config.root_dir, config.valid_img_dir, config.valid_mask_dir, config.transform)
-train_loader = DataLoader(train_dataset, batch_size=config.batchsize, shuffle=True)
-valid_loader = DataLoader(valid_dataset, batch_size=config.batchsize, shuffle=False)
+train_loader = DataLoader(train_dataset, batch_size=config.batchsize, shuffle=True,pin_memory=True,num_workers=4)
+valid_loader = DataLoader(valid_dataset, batch_size=config.batchsize, shuffle=False,pin_memory=True,num_workers=4)
 
 # ==================== 训练和验证 ====================
 def calculate_iou(preds, targets):
@@ -277,7 +280,7 @@ def main():
 
 
     model = config.backbone
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-3)
     train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
 
 if __name__ == '__main__':

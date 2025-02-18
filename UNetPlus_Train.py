@@ -15,9 +15,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 from loadImg import device
 
-# 封装 clamp 函数
-def clamp_transform(x):
-    return x.clamp(0, 1)
 
 class TumorDataset(Dataset):
     def __init__(self, root_dir, img_dir, mask_dir, transform=None):
@@ -66,6 +63,9 @@ class Config:
         self.print_freq = print_freq
 import segmentation_models_pytorch as smp
 from torch.optim import Adam, SGD
+# 封装 clamp 函数
+def clamp_transform(x):
+    return x.clamp(0, 1)
 
 config = Config(
     device="cuda",
@@ -76,8 +76,8 @@ config = Config(
     test_mask_dir="../archive/test_mask",
     valid_img_dir="../archive/valid_img",
     valid_mask_dir="../archive/valid_mask",
-    backbone=smp.DeepLabV3Plus(
-        encoder_name="mobilenet_v2",
+    backbone=smp.UnetPlusPlus(
+        encoder_name="resnet50",
         encoder_weights='imagenet',
         in_channels=1,
         classes=1
@@ -88,15 +88,15 @@ config = Config(
         transforms.Normalize(mean=[0.485], std=[0.229]),  # Assuming grayscale images
         transforms.Lambda(clamp_transform)
     ]),
-    batchsize=2,
-    lr=1e-3,
-    num_epochs=30,
+    batchsize=8,
+    lr=1e-4,
+    num_epochs=15,
     print_freq=1
 )
 train_dataset = TumorDataset(config.root_dir, config.train_img_dir, config.train_mask_dir, config.transform)
 valid_dataset = TumorDataset(config.root_dir, config.valid_img_dir, config.valid_mask_dir, config.transform)
-train_loader = DataLoader(train_dataset, batch_size=config.batchsize, shuffle=True ,num_workers=4,pin_memory=True)
-valid_loader = DataLoader(valid_dataset, batch_size=config.batchsize, shuffle=False,num_workers=4,pin_memory=True)
+train_loader = DataLoader(train_dataset, batch_size=config.batchsize, shuffle=True, num_workers=4,pin_memory=True)
+valid_loader = DataLoader(valid_dataset, batch_size=config.batchsize, shuffle=False, num_workers=4,pin_memory=True)
 from tqdm import tqdm
 def dice_loss(pred, target, smooth=1e-6):
     intersection = (pred * target).sum()
@@ -155,7 +155,7 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
         optimizer,
         mode='min',  # 'min' 或 'max'，根据监测指标选择
         factor=0.1,  # 学习率降低的因子
-        patience=2,  # 在多少个epoch内没有改善时触发
+        patience=3,  # 在多少个epoch内没有改善时触发
         threshold=0.001,
         min_lr=1e-6  # 最小学习率
     )
@@ -230,28 +230,14 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     # 训练结束后关闭交互模式
     plt.ioff()
     plt.show()
-    torch.save(model.state_dict(), f'./model/DeepLabV3plus_epoch_{num_epochs}.pth')
-
-def load_train():
-    criterion = dice_loss  # 使用自定义的 Dice Loss
-
-    model = config.backbone
-    model_path = 'model/DeepLabV3plus_epoch_30.pth'  # 替换为你的模型路径
-    model.load_state_dict(torch.load(model_path))
-
-    optimizer = AdamW(
-        model.parameters(),
-        lr=3e-4,  # 初始学习率
-        weight_decay=1e-4  # 权重衰减
-    )
-    train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
+    torch.save(model.state_dict(), f'./model/UNetPlus_epoch_{num_epochs}.pth')
 
 def main():
     criterion = dice_loss  # 使用自定义的 Dice Loss
     model = config.backbone
-    optimizer = SGD(config.backbone.parameters(), lr=1e-4, momentum=0.9, weight_decay=0.0005)
+    optimizer = SGD(config.backbone.parameters(), lr=1e-2, momentum=0.9, weight_decay=0.0005)
     train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
 
 
 if __name__ == '__main__':
-    load_train()
+    main()
