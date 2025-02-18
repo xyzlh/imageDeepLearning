@@ -190,8 +190,8 @@ config = Config(
         transforms.Lambda(lambda x: x.clamp(0, 1))
     ]),
     batchsize=4,
-    lr=0.01,
-    num_epochs=15,
+    lr=1e-4,
+    num_epochs=25,
     print_freq=1
 )
 
@@ -343,7 +343,7 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
         'attention_heads': 4,
         'state_dict': model.state_dict(),
 
-    }, f'./model/DeepLabV3plus_epoch_{num_epochs}.pth')
+    }, f'./model/Atten_DeepLabV3plus_epoch_{num_epochs}.pth')
 
 
 
@@ -351,8 +351,6 @@ def main():
     model = config.backbone
     criterion = dice_loss  # 使用自定义的 Dice Loss
     optimizer = SGD(config.backbone.parameters(), lr=config.lr, momentum=0.9, weight_decay=0.0005)
-    model_path = 'model/DeepLabV3plus_epoch_15.pth'  # 替换为你的模型路径
-    model.load_state_dict(torch.load(model_path, map_location=device),strict=False)
 
 
     train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
