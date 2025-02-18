@@ -79,7 +79,7 @@ class ViTSeg(nn.Module):
         super().__init__()
         # 使用 "vit_base_patch16_224" 模型
         self.vit = timm.create_model(
-            "vit_base_patch16_224",  # 修改为 vit_base
+            "vit_tiny_patch16_224",  # 修改为 vit_base
             pretrained=True,
             in_chans=1,
             img_size=img_size
@@ -91,7 +91,7 @@ class ViTSeg(nn.Module):
 
         # 根据模型的输出通道数量调整解码器
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(768, 256, kernel_size=4, stride=4),  # viT Base 通常有768个输出通道
+            nn.ConvTranspose2d(192, 256, kernel_size=4, stride=4),  # viT Base 通常有768个输出通道
             nn.BatchNorm2d(256),
             nn.GELU(),
             nn.Conv2d(256, 128, kernel_size=3, padding=1),
@@ -193,9 +193,8 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     scheduler = ReduceLROnPlateau(
         optimizer,
         mode='min',  # 'min' 或 'max'，根据监测指标选择
-        factor=0.1,  # 学习率降低的因子
-        patience=5,  # 在多少个epoch内没有改善时触发
-        verbose=True,  # 输出调度信息
+        factor=0.5,  # 学习率降低的因子
+        patience=2,  # 在多少个epoch内没有改善时触发
         min_lr=1e-6  # 最小学习率
     )
     with ThreadPoolExecutor(max_workers=1) as executor:
