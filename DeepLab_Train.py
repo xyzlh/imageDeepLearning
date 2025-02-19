@@ -6,19 +6,35 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import segmentation_models_pytorch as smp
 from torch.optim import Adam, SGD, AdamW
-
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 import torch
-
 from concurrent.futures import ThreadPoolExecutor
-
 from loadImg import device
+import segmentation_models_pytorch as smp
+from torch.optim import Adam, SGD
 
 # 封装 clamp 函数
 def clamp_transform(x):
     return x.clamp(0, 1)
-
+class Config:
+    def __init__(self, device, root_dir, train_img_dir, train_mask_dir,
+                 test_img_dir, test_mask_dir, valid_img_dir, valid_mask_dir,
+                 backbone, transform, batchsize, lr, num_epochs, print_freq):
+        self.device = device  # cuda or 0 or cpu
+        self.root_dir = root_dir
+        self.train_img_dir = train_img_dir
+        self.train_mask_dir = train_mask_dir
+        self.test_img_dir = test_img_dir
+        self.test_mask_dir = test_mask_dir
+        self.valid_img_dir = valid_img_dir
+        self.valid_mask_dir = valid_mask_dir
+        self.backbone = backbone
+        self.transform = transform
+        self.batchsize = batchsize
+        self.lr = lr
+        self.num_epochs = num_epochs
+        self.print_freq = print_freq
 class TumorDataset(Dataset):
     def __init__(self, root_dir, img_dir, mask_dir, transform=None):
         self.root_dir = root_dir  # /kaggle/working/
@@ -46,26 +62,6 @@ class TumorDataset(Dataset):
             mask = self.transform(mask)
 
         return img_gray, mask
-class Config:
-    def __init__(self, device, root_dir, train_img_dir, train_mask_dir,
-                 test_img_dir, test_mask_dir, valid_img_dir, valid_mask_dir,
-                 backbone, transform, batchsize, lr, num_epochs, print_freq):
-        self.device = device  # cuda or 0 or cpu
-        self.root_dir = root_dir
-        self.train_img_dir = train_img_dir
-        self.train_mask_dir = train_mask_dir
-        self.test_img_dir = test_img_dir
-        self.test_mask_dir = test_mask_dir
-        self.valid_img_dir = valid_img_dir
-        self.valid_mask_dir = valid_mask_dir
-        self.backbone = backbone
-        self.transform = transform
-        self.batchsize = batchsize
-        self.lr = lr
-        self.num_epochs = num_epochs
-        self.print_freq = print_freq
-import segmentation_models_pytorch as smp
-from torch.optim import Adam, SGD
 
 config = Config(
     device="cuda",
@@ -80,17 +76,18 @@ config = Config(
         encoder_name="resnet50",
         encoder_weights='imagenet',
         in_channels=1,
-        classes=1
+        classes=1,
+
     ),
     transform=transforms.Compose([
-        transforms.Resize(224),
+        transforms.Resize(256),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485], std=[0.229]),  # Assuming grayscale images
         transforms.Lambda(clamp_transform)
     ]),
     batchsize=16,
-    lr=1e-3,
-    num_epochs=30,
+    lr=1e-4,
+    num_epochs=10,
     print_freq=1
 )
 train_dataset = TumorDataset(config.root_dir, config.train_img_dir, config.train_mask_dir, config.transform)
@@ -151,13 +148,11 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     valid_ious = []
     plt.ion()
     # 替换原有的ReduceLROnPlateau
-    scheduler = ReduceLROnPlateau(
+    scheduler = CosineAnnealingLR(
         optimizer,
-        mode='min',  # 'min' 或 'max'，根据监测指标选择
-        factor=0.1,  # 学习率降低的因子
-        patience=2,  # 在多少个epoch内没有改善时触发
-        threshold=0.001,
-        min_lr=1e-6  # 最小学习率
+        T_max=5,
+        eta_min=1e-6,
+
     )
     with ThreadPoolExecutor(max_workers=1) as executor:
         scaler = torch.amp.GradScaler('cuda')
@@ -220,7 +215,7 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
             train_ious.append(epoch_miou)
             valid_losses.append(avg_valid_loss)
             valid_ious.append(avg_valid_miou)
-            scheduler.step(avg_valid_loss)  # 根据验证集的损失调整学习率
+            scheduler.step(avg_valid_miou)  # 根据验证集的iou调整学习率
             executor.submit(plot_metrics, epoch + 1, train_losses, valid_losses, train_ious, valid_ious)
 
     # 训练结束后关闭交互模式
@@ -230,22 +225,21 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
 
 def load_train():
     criterion = dice_loss  # 使用自定义的 Dice Loss
-
     model = config.backbone
-    model_path = 'model/DeepLabV3plus_epoch_30.pth'  # 替换为你的模型路径
+    model_path = 'model/DeepLabV3plus_epoch_15.pth'
     model.load_state_dict(torch.load(model_path))
-
-    optimizer = AdamW(
-        model.parameters(),
-        lr=3e-4,  # 初始学习率
-        weight_decay=1e-4  # 权重衰减
-    )
+    optimizer = SGD(config.backbone.parameters(), lr=1e-3, momentum=0.9, weight_decay=1e-4, nesterov=True)
     train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
+
 
 def main():
     criterion = dice_loss  # 使用自定义的 Dice Loss
     model = config.backbone
-    optimizer = SGD(config.backbone.parameters(), lr=1e-4, momentum=0.9, weight_decay=0.0005)
+    optimizer = AdamW(
+        model.parameters(),
+        lr=1e-4,  # 初始学习率
+        weight_decay=1e-4  # 权重衰减
+    )
     train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
 
 

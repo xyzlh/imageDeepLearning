@@ -1,9 +1,9 @@
-
+import torch.functional as F
 import os
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor
 import matplotlib.pyplot as plt
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 import torch
@@ -80,9 +80,9 @@ class TumorDataset(Dataset):
 class ViTSeg(nn.Module):
     def __init__(self, num_classes=1, img_size=224):
         super().__init__()
-        # 使用 "vit_base_patch16_224" 模型
+
         self.vit = timm.create_model(
-            "vit_tiny_patch16_224",  # 修改为 vit_base
+            "vit_small_patch16_224",
             pretrained=True,
             in_chans=1,
             img_size=img_size
@@ -90,16 +90,36 @@ class ViTSeg(nn.Module):
         self._adapt_first_conv()
         del self.vit.cls_token
         self.vit.pos_embed = nn.Parameter(self.vit.pos_embed[:, 1:, :])
-        self._freeze_layers(6)
 
-        # 根据模型的输出通道数量调整解码器
+        self.dropout = nn.Dropout(p=0.1)  # 在必要的地方应用 dropout
+
+        # 改进解码器结构
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(192, 256, kernel_size=4, stride=4),  # viT Base 通常有768个输出通道
+            nn.Upsample(scale_factor=2, mode='bilinear'),
+            nn.Conv2d(384, 256, 3, padding=1),
             nn.BatchNorm2d(256),
             nn.GELU(),
-            nn.Conv2d(256, 128, kernel_size=3, padding=1),
-            nn.ConvTranspose2d(128, num_classes, kernel_size=4, stride=4)  # 输出通道为 num_classes
-        )
+            nn.Dropout(0.2),
+
+            nn.Upsample(scale_factor=2, mode='bilinear'),
+            nn.Conv2d(256, 128, 3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.GELU(),
+
+            nn.Upsample(scale_factor=2, mode='bilinear'),
+            nn.Conv2d(128, 64, 3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.GELU(),
+
+
+             # 新增的上采样层
+            nn.Upsample(scale_factor=2, mode='bilinear'),  # 输出尺寸变为224x224
+            nn.Conv2d(64, 32, 3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.GELU(),
+
+            nn.Conv2d(32, num_classes, 1)
+            )
 
     def _adapt_first_conv(self):
         orig_conv = self.vit.patch_embed.proj
@@ -115,12 +135,6 @@ class ViTSeg(nn.Module):
             new_conv.bias.data = orig_conv.bias.data.clone()
         self.vit.patch_embed.proj = new_conv
 
-    def _freeze_layers(self, num_layers):
-        for i, block in enumerate(self.vit.blocks):
-            if i < num_layers:
-                for param in block.parameters():
-                    param.requires_grad = False
-
     def forward(self, x):
         x = self.vit.patch_embed(x)
         x = x + self.vit.pos_embed
@@ -129,7 +143,6 @@ class ViTSeg(nn.Module):
         H = W = int(N ** 0.5)
         x = x.permute(0, 2, 1).view(B, C, H, W)
         return self.decoder(x)
-
 # ==================== 配置模型 ====================
 class Config:
     def __init__(self, device, root_dir, train_img_dir, train_mask_dir,  valid_img_dir, valid_mask_dir, backbone, transform, batchsize, lr, num_epochs, print_freq):
@@ -165,9 +178,9 @@ config = Config(
         transforms.Normalize(mean=[0.485], std=[0.229]),  # 假设灰度图像
         transforms.Lambda(clamp_transform)
     ]),
-    batchsize=8,
-    lr=0.001,
-    num_epochs=25,
+    batchsize=16,
+    lr=0.0001,
+    num_epochs=10,
     print_freq=1
 )
 
@@ -193,13 +206,11 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     valid_losses = []
     valid_ious = []
     plt.ion()
-    scheduler = ReduceLROnPlateau(
+    scheduler =CosineAnnealingLR(
         optimizer,
-        mode='min',  # 'min' 或 'max'，根据监测指标选择
-        factor=0.5,  # 学习率降低的因子
-        patience=2,  # 在多少个epoch内没有改善时触发
-        min_lr=1e-6  # 最小学习率
-    )
+        T_max=num_epochs,
+        eta_min=1e-6,
+                                 )
     with ThreadPoolExecutor(max_workers=1) as executor:
         scaler = torch.amp.GradScaler('cuda')
         for epoch in range(num_epochs):
@@ -269,15 +280,25 @@ def train(train_loader, valid_loader, model, criterion, optimizer, num_epochs):
     plt.ioff()
     plt.show()
     torch.save(model.state_dict(), f'./model/ViT_epoch_{num_epochs}.pth')
+def load_train():
+    criterion = dice_loss  # 使用自定义的 Dice Loss
+
+    model = config.backbone
+    model_path = 'model/ViT_epoch_25.pth'  # 替换为你的模型路径
+    model.load_state_dict(torch.load(model_path))
+
+    optimizer =  torch.optim.AdamW(
+        model.parameters(),
+        lr=1e-5,  # 初始学习率
+        weight_decay=1e-5  # 权重衰减
+    )
+    train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
 
 def main():
     criterion = dice_loss  # 使用自定义的 Dice Loss
-
-
-
     model = config.backbone
-    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-3)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
     train(train_loader, valid_loader, model, criterion, optimizer, num_epochs=config.num_epochs)
 
 if __name__ == '__main__':
-    main()
+    load_train()
